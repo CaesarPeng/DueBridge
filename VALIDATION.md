@@ -14,11 +14,14 @@
 - 使用系统 Python 3.14 在全新虚拟环境安装 wheel，运行版本、初始化、doctor、本地扫描、JSON 输出和 `duedates` 别名成功；全文包含截止日期前后的规则上下文。
 - 解压源码 ZIP，在独立目录执行 `sh install.sh`，再运行源码启动器成功。安装不依赖 Study 工程或 Codex 路径。
 - 源码 ZIP、wheel、sdist 的发布名单及内容检查通过，排除了私有配置、原文缓存、会话、材料和个人课程编号，并生成 SHA-256 校验文件。
+- 0.1.1 的跨平台 CDP 启动修复已通过本地 Chromium/CDP 测试，Chromium/WebKit 的 22 个测试方法重新通过。
+- GitHub Ubuntu CI 的 [修复提交 e872a54](https://github.com/CaesarPeng/DueBridge/actions/runs/38562724255) 五项作业全部成功：Python 3.11、3.13 的单元测试及 Chromium、Firefox、WebKit 的集成测试。Firefox 在 Linux 上已完成采集验证。
+- DueBridge 0.1.1 wheel 在全新系统 Python 虚拟环境安装后，`duebridge`、`homework`、`duedates` 三个入口均返回正确版本。
 
 ## 限制
 
-- Firefox 后端已实现。本机下载的 Playwright Firefox 启动即报 `Could not find profile folder`；使用 Playwright 原生最小启动、不使用本项目代码时也复现。因此 Firefox 采集尚未验证，需在可启动 Firefox 的环境继续测试。
-- Chrome channel、Windows 及真实学校的登录/页面变化未在本次本地验证。GitHub Ubuntu CI 已运行，两个 Python 版本的单元测试通过；初次 Chromium 作业的 CDP 临时浏览器启动失败，普通采集场景通过，Firefox/WebKit 被矩阵失败策略取消。0.1.1 已改用独立 Playwright 进程启动 CDP 测试浏览器，并让各内核分别跑完。
+- 本机 macOS 下载的 Playwright Firefox 启动即报 `Could not find profile folder`；使用 Playwright 原生最小启动、不使用本项目代码时也复现。Linux 集成测试已通过，本机 macOS 的 Firefox 仍需排查。
+- Chrome channel、Windows 及真实学校的登录/页面变化未在本次验证。初次 GitHub CI 的临时 CDP 浏览器启动失败，0.1.1 已改用独立 Playwright 进程启动，并让各内核分别跑完；修复后的 Ubuntu CI 已通过。
 - 所有网页集成测试均拦截模拟数据，不访问真实学生账号；不能由模拟测试推出新项目已刷新真实课程数据。
 
 测试使用模拟课程页，不访问真实学生账号。各学校的页面结构、真实登录流程和不同系统的浏览器权限，需要使用者在自己的环境中核对。

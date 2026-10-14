@@ -41,7 +41,7 @@ duebridge show
 | `arc` | Arc 自带 AppleScript 接口，macOS | 现有正常窗口和 Profile |
 | `chromium` | Playwright Chromium | 项目独立目录，首次需登录 |
 | `chrome` / `edge` | Playwright 调用已安装的 Chrome / Edge | 项目独立目录，首次需登录 |
-| `firefox` | Playwright Firefox（本机启动受限，待验证） | 项目独立目录，首次需登录 |
+| `firefox` | Playwright Firefox（Linux CI 通过，本机 macOS 启动受限） | 项目独立目录，首次需登录 |
 | `webkit` | Playwright WebKit | 项目独立目录，首次需登录 |
 | `cdp` | 连接显式开启的本机 Chromium 调试端口 | 被连接浏览器的已有会话 |
 
@@ -55,7 +55,7 @@ duebridge sync --browser chromium
 
 把 `chromium` 换成 `firefox` 或 `webkit` 即可安装对应内核。`chrome` 和 `edge` 使用本机已安装的浏览器，不复制日常 Profile。`webkit` 指 Playwright 的 WebKit 浏览器，并不是接管已经打开的 Safari。运行结束后专属窗口关闭，登录目录保留；`duebridge login smartphysics --browser chromium` 可提前登录。
 
-本次已实际验证 Chromium、WebKit、Edge 和本机 CDP；Firefox 后端已实现，但本机 Playwright Firefox 在启动阶段报告 `Could not find profile folder`，包含原生 Playwright 最小启动也失败，尚未完成采集验证。不要将它视为已经实测通过的内核。完整范围见 `VALIDATION.md`。
+Chromium、Firefox、WebKit 已通过 GitHub Ubuntu CI 的模拟课程采集测试，本地 Chromium、WebKit、Edge 和 CDP 也有验证。本机 macOS 的 Playwright Firefox 仍在启动阶段报告 `Could not find profile folder`，原生 Playwright 最小启动也复现；Linux 通过不能推出所有 Mac 均已验证。完整范围见 `VALIDATION.md`。
 
 CDP 仅支持本机地址，需自行启动带调试端口和专用用户目录的 Chromium 浏览器，再配置：
 
