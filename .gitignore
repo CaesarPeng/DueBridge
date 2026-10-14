@@ -1,0 +1,40 @@
+# Private workspaces, course material, and browser sessions
+.homework/
+homework.toml
+DUEDATES.md
+materials/
+profiles/
+sessions/
+browser-data/
+storage-state*.json
+cookies*.json
+credentials*.json
+*.har
+
+# Secrets and local environment files
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# Python environments and generated files
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+*.log
+
+# Editor and OS files
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db

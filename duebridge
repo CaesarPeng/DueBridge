@@ -1,0 +1,16 @@
+#!/usr/bin/env python3
+"""Portable source launcher; installed entry points work from any workspace."""
+import os
+from pathlib import Path
+import sys
+
+root = Path(__file__).resolve().parent
+venv_python = root / ".venv" / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
+if venv_python.exists() and sys.prefix != str(root / ".venv"):
+    os.execv(str(venv_python), [str(venv_python), str(Path(__file__).resolve()), *sys.argv[1:]])
+if sys.version_info < (3, 11):
+    raise SystemExit("需要 Python 3.11+；请升级后运行 install.sh")
+sys.path.insert(0, str(root / "src"))
+from homework_assistant.cli import main
+
+raise SystemExit(main())

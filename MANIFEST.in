@@ -1,0 +1,6 @@
+include README.md LICENSE AGENTS.md CONTRIBUTING.md VALIDATION.md install.sh duebridge homework .gitignore
+recursive-include examples *.toml
+recursive-include tests *.py
+include scripts/package.py
+include .github/workflows/tests.yml
+recursive-include src/homework_assistant/assets *.js *.applescript *.toml

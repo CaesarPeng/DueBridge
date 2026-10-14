@@ -1,0 +1,31 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "duebridge"
+version = "0.1.0"
+description = "Configurable, local-first course source collector for homework assistants"
+readme = "README.md"
+requires-python = ">=3.11"
+license = "MIT"
+dependencies = ["pypdf>=6,<7", "tzdata>=2025.1"]
+
+[project.optional-dependencies]
+browser = ["playwright>=1.48,<2"]
+dev = ["playwright>=1.48,<2", "build>=1.2,<2"]
+
+[project.scripts]
+duebridge = "homework_assistant.cli:main"
+homework = "homework_assistant.cli:main"
+duedates = "homework_assistant.cli:main"
+
+[project.urls]
+Repository = "https://github.com/CaesarPeng/DueBridge"
+Issues = "https://github.com/CaesarPeng/DueBridge/issues"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+homework_assistant = ["assets/*.js", "assets/*.applescript", "assets/*.toml"]

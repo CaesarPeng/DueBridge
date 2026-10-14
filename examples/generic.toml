@@ -1,0 +1,24 @@
+timezone = "Asia/Shanghai"
+output = "DUEDATES.md"
+
+[browser]
+engine = "chromium"
+timeout = 180
+
+[local]
+paths = ["materials"]
+
+# 示例域名。请换成自己的平台和实际页面选择器，再启用。
+[[sources]]
+id = "my-course"
+adapter = "generic"
+enabled = false
+home = "https://courses.example.edu/assignments"
+domains = ["courses.example.edu"]
+
+[sources.options]
+selector = ".assignment-row"
+empty_selector = ".no-assignments"
+# 可选：只跟进明确的列表链接，不自动点击按钮或打开答题页面。
+# list_links = "a.assignment-list"
+# list_url_pattern = "^https://courses\\.example\\.edu/assignments(?:[/?]|$)"

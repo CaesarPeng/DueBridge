@@ -1,0 +1,46 @@
+timezone = "Asia/Shanghai"
+output = "DUEDATES.md"
+
+[browser]
+engine = "arc"
+timeout = 180
+
+[local]
+paths = ["materials"]
+
+# 学校域名和入口都可以替换。启用 Blackboard 前，请填自己的课程列表。
+[[sources]]
+id = "blackboard"
+adapter = "blackboard"
+enabled = false
+home = "https://learn.intl.zju.edu.cn/"
+domains = ["learn.intl.zju.edu.cn"]
+courses = []
+# courses = [{name = "课程名称", id = "_1234_1"}]
+
+[[sources]]
+id = "webassign"
+adapter = "webassign"
+home = "https://student.cengage.com/dashboard/home"
+domains = ["cengage.com", "*.cengage.com", "webassign.net", "*.webassign.net"]
+assignment_domains = ["webassign.net", "*.webassign.net"]
+
+[[sources]]
+id = "smartphysics"
+adapter = "smartphysics"
+home = "https://smart.physics.illinois.edu/"
+domains = ["smart.physics.illinois.edu"]
+
+[[sources]]
+id = "zjuilearn"
+adapter = "zjuilearn"
+home = "https://zjuilearn.com.cn/"
+domains = ["zjuilearn.com.cn"]
+
+# 这是配置禁用，不是认定本学期没有作业。需要时设为 true。
+[[sources]]
+id = "prairielearn"
+adapter = "prairielearn"
+enabled = false
+home = "https://us.prairielearn.com/pl/login"
+domains = ["us.prairielearn.com"]

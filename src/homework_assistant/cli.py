@@ -1,0 +1,180 @@
+from __future__ import annotations
+
+import argparse
+from dataclasses import replace
+import importlib.util
+import json
+from pathlib import Path
+import subprocess
+import sys
+
+from . import __version__
+from . import browsers, collector, local, storage
+from .config import Config, ENGINES, load
+
+ASSETS = Path(__file__).parent / "assets"
+
+
+def init(root: Path, preset: str, engine: str | None) -> None:
+    root.mkdir(parents=True, exist_ok=True)
+    path = root / "homework.toml"
+    if path.exists():
+        raise ValueError("homework.toml 已存在；保留现有配置，请直接编辑")
+    text = (ASSETS / f"{preset}.toml").read_text(encoding="utf-8")
+    if engine:
+        text = text.replace('engine = "arc"', f'engine = "{engine}"').replace('engine = "chromium"', f'engine = "{engine}"')
+    elif sys.platform != "darwin":
+        text = text.replace('engine = "arc"', 'engine = "chromium"')
+    storage.write_text(path, text)
+    (root / "materials").mkdir(exist_ok=True)
+    ignore = root / ".gitignore"
+    existing = ignore.read_text(encoding="utf-8") if ignore.exists() else ""
+    patterns = [".homework/", "homework.toml", "DUEDATES.md", "materials/", ".venv/"]
+    missing = [p for p in patterns if p not in existing.splitlines()]
+    if missing:
+        storage.write_text(ignore, existing.rstrip() + "\n" + "\n".join(missing) + "\n")
+    print(f"已创建：{path}\n请核对启用的平台、课程和浏览器；把本地课程资料放入 materials/。")
+
+
+def selected(config: Config, id: str | None):
+    if id:
+        source = next((s for s in config.sources if s.id == id), None)
+        if source is None:
+            raise ValueError(f"没有名为 {id} 的来源")
+        if not source.enabled:
+            raise ValueError(f"{id} 已禁用；请先在配置中设置 enabled = true")
+        return [source]
+    return [s for s in config.sources if s.enabled]
+
+
+def sync(config: Config, source_id: str | None, engine: str | None, timeout: int | None) -> int:
+    sources = selected(config, source_id)
+    if not sources:
+        raise ValueError("没有启用的来源；请编辑 homework.toml")
+    config = replace(config, sources=tuple(sources))
+    seconds = config.timeout if timeout is None else timeout
+    if not 1 <= seconds <= 3600:
+        raise ValueError("timeout 必须是 1–3600 秒")
+    browser = None
+    failures = []
+    try:
+        for source in sources:
+            try:
+                if source.adapter == "blackboard" and not source.courses:
+                    raise ValueError(f"{source.id}：请配置 courses 的名称和课程 id")
+                if browser is None:
+                    browser = browsers.create(config, engine)
+                old = storage.read_json(config.state / "sources" / f"{source.id}.json", {})
+                pages = old.get("pages", []) if old.get("identity") == source.identity() else []
+                result = collector.capture(browser, source, seconds, pages)
+                storage.save(config, source, result)
+                print(f"{source.id} 已采集并保存。")
+            except (RuntimeError, ValueError, OSError) as error:
+                failures.append(source.id)
+                storage.health(config, source.id, "error", str(error))
+                print(f"{source.id}：{error}", file=sys.stderr)
+            # Preserve disabled and unselected source coverage in the report.
+            storage.render(load(config.root))
+    finally:
+        if browser:
+            browser.close()
+    print(f"已保存：{config.root / config.output}")
+    return 2 if failures else 0
+
+
+def doctor(root: Path) -> None:
+    print(f"DueBridge {__version__}；Python {sys.version.split()[0]}")
+    print("Arc：" + ("已安装" if Path("/Applications/Arc.app").is_dir() and sys.platform == "darwin" else "不可用（需要 macOS + Arc）"))
+    print("Playwright：" + ("已安装" if importlib.util.find_spec("playwright") else "未安装；Arc 和本地扫描不需要"))
+    if (root / "homework.toml").exists():
+        config = load(root)
+        print(f"配置有效；浏览器 {config.browser}；时区 {config.timezone}")
+        for s in config.sources:
+            detail = "启用" if s.enabled else "禁用（不等于没有作业）"
+            if s.enabled and s.adapter == "blackboard" and not s.courses:
+                detail += "；需要填写 courses"
+            if s.enabled and s.adapter == "generic" and not s.options.get("selector"):
+                detail += "；需要填写 options.selector"
+            print(f"  {s.id} ({s.adapter})：{detail}")
+    else:
+        print("未初始化；运行 homework init --preset zju 或 homework init")
+    print("Arc 首次使用：允许当前终端控制 Arc，并手动开启 View → Developer → Allow JavaScript from Apple Events。")
+    print("其他内核使用项目专属登录目录；CDP 为显式本机会话连接。doctor 不改变浏览器权限。")
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description="可配置的本地作业资料助手：采集原文，保存来源与覆盖范围")
+    parser.add_argument("--version", action="version", version=__version__)
+    parser.add_argument("--project", type=Path, default=Path.cwd(), help="配置和输出所在的项目目录")
+    commands = parser.add_subparsers(dest="command", required=True)
+    initialize = commands.add_parser("init", help="生成通用或 ZJU 平台配置，不覆盖已有文件")
+    initialize.add_argument("--preset", choices=("generic", "zju"), default="generic")
+    initialize.add_argument("--browser", choices=ENGINES)
+    commands.add_parser("doctor", help="检查安装及配置，不改变安全设置")
+    install = commands.add_parser("browser-install", help="安装可选的 Playwright 浏览器内核")
+    install.add_argument("engine", choices=("chromium", "firefox", "webkit"))
+    update = commands.add_parser("sync", aliases=["capture"], help="采集网页来源并生成 Markdown")
+    update.add_argument("--source", help="仅采集一个配置来源")
+    update.add_argument("--browser", choices=ENGINES)
+    update.add_argument("--timeout", type=int)
+    login = commands.add_parser("login", help="打开课程入口，完成正常网页登录")
+    login.add_argument("source")
+    login.add_argument("--browser", choices=ENGINES)
+    commands.add_parser("scan", help="扫描配置路径中的本地课程文件")
+    commands.add_parser("status", help="列出独立抓取时间和最近错误")
+    show = commands.add_parser("show", help="查看现有 Markdown 或原始 JSON")
+    show.add_argument("--json", action="store_true", help="输出原始资料、健康状态和本地索引")
+    args = parser.parse_args(argv)
+    root = args.project.expanduser().resolve()
+    try:
+        if args.command == "init":
+            init(root, args.preset, args.browser)
+            return 0
+        if args.command == "doctor":
+            doctor(root)
+            return 0
+        if args.command == "browser-install":
+            if not importlib.util.find_spec("playwright"):
+                raise ValueError('请先安装可选依赖：python -m pip install ".[browser]"')
+            return subprocess.run([sys.executable, "-m", "playwright", "install", args.engine]).returncode
+        config = load(root)
+        if args.command in {"sync", "capture"}:
+            return sync(config, args.source, args.browser, args.timeout)
+        if args.command == "scan":
+            result = local.scan(config)
+            print(f"已保存：{storage.render(config)}；全文 {len(result['entries'])} 份，读取失败 {len(result['failures'])} 份。")
+            return 2 if result["failures"] else 0
+        if args.command == "login":
+            source = selected(config, args.source)[0]
+            browser = browsers.create(replace(config, sources=(source,)), args.browser)
+            try:
+                browser.open(source.home)
+                print("请在浏览器中正常登录；不会自动填写或导出密码。", flush=True)
+                if browser.name != "arc":
+                    input("登录完成后按 Enter 保存项目会话并关闭此窗口：")
+            finally:
+                browser.close()
+            return 0
+        health = storage.read_json(config.state / "health.json", {})
+        if args.command == "status":
+            for source in config.sources:
+                data = storage.read_json(config.state / "sources" / f"{source.id}.json", {})
+                current = data.get("identity") == source.identity()
+                print(source.id, "禁用" if not source.enabled else storage.local_time(data["fetched_at"], config) if current and data else "未采集当前配置", json.dumps(health.get(source.id, {}), ensure_ascii=False))
+            return 0
+        if args.json:
+            data = {"sources": {s.id: storage.read_json(config.state / "sources" / f"{s.id}.json", {}) for s in config.sources},
+                    "health": health, "local": storage.read_json(config.state / "local.json", {})}
+            print(json.dumps(data, ensure_ascii=False, indent=2))
+        else:
+            path = root / config.output
+            if not path.exists():
+                raise ValueError("没有汇总文件；先运行 homework scan 或 homework sync")
+            print(path.read_text(encoding="utf-8"), end="")
+        return 0
+    except KeyboardInterrupt:
+        print("已取消；已保存资料和旧抓取时间保留。", file=sys.stderr)
+        return 130
+    except (OSError, RuntimeError, ValueError, EOFError) as error:
+        print(f"错误：{error}", file=sys.stderr)
+        return 1
