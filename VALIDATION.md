@@ -18,7 +18,7 @@
 ## 限制
 
 - Firefox 后端已实现。本机下载的 Playwright Firefox 启动即报 `Could not find profile folder`；使用 Playwright 原生最小启动、不使用本项目代码时也复现。因此 Firefox 采集尚未验证，需在可启动 Firefox 的环境继续测试。
-- Chrome channel、Windows、Linux 及真实学校的登录/页面变化未在本次验证。CI 工作流已配置，但尚未在 GitHub 运行。
+- Chrome channel、Windows 及真实学校的登录/页面变化未在本次本地验证。GitHub Ubuntu CI 已运行，两个 Python 版本的单元测试通过；初次 Chromium 作业的 CDP 临时浏览器启动失败，普通采集场景通过，Firefox/WebKit 被矩阵失败策略取消。0.1.1 已改用独立 Playwright 进程启动 CDP 测试浏览器，并让各内核分别跑完。
 - 所有网页集成测试均拦截模拟数据，不访问真实学生账号；不能由模拟测试推出新项目已刷新真实课程数据。
 
 测试使用模拟课程页，不访问真实学生账号。各学校的页面结构、真实登录流程和不同系统的浏览器权限，需要使用者在自己的环境中核对。

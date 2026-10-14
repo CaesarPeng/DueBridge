@@ -4,7 +4,7 @@ A configurable, local-first homework assistant with multi-browser and LMS adapte
 
 一个可以定制学校平台和浏览器的本地作业资料助手。它将网页列表及本地课程文件保存为 `DUEDATES.md` 和原始 JSON，供人或 AI 助手核对截止日期。运行时不需要 Codex，不调用模型、不上传资料，也不自动答题或提交作业。
 
-**Python 3.11+。Arc 接入限 macOS；Chromium、Firefox、WebKit 接入使用 Playwright，适用于其支持的系统。当前版本 0.1.0。**
+**Python 3.11+。Arc 接入限 macOS；Chromium、Firefox、WebKit 接入使用 Playwright，适用于其支持的系统。当前版本 0.1.1。**
 
 ## 安装与快速开始
 

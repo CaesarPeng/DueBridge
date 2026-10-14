@@ -11,7 +11,7 @@ import tarfile
 from zipfile import ZipFile, ZipInfo, ZIP_DEFLATED
 
 ROOT = Path(__file__).resolve().parents[1]
-VERSION = "0.1.0"
+VERSION = "0.1.1"
 TOP = f"duebridge-{VERSION}"
 FIXED = ("pyproject.toml", "MANIFEST.in", ".gitignore", "README.md", "LICENSE", "AGENTS.md",
          "CONTRIBUTING.md", "VALIDATION.md", "install.sh", "duebridge", "homework", "scripts/package.py", ".github/workflows/tests.yml")

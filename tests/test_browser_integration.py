@@ -5,6 +5,7 @@ import os
 from pathlib import Path
 import socket
 import subprocess
+import sys
 import tempfile
 import time
 import unittest
@@ -152,17 +153,26 @@ class BrowserIntegrationTests(unittest.TestCase):
 
     @unittest.skipUnless("chromium" in ENGINES, "CDP fixture needs the Chromium test engine")
     def test_cdp_collects_and_disconnects_without_closing_external_browser(self):
-        from playwright.sync_api import sync_playwright
-        with sync_playwright() as runtime:
-            executable = runtime.chromium.executable_path
         with tempfile.TemporaryDirectory() as folder:
             with socket.socket() as listener:
                 listener.bind(("127.0.0.1", 0))
                 port = listener.getsockname()[1]
-            process = subprocess.Popen([executable, "--headless", "--remote-debugging-address=127.0.0.1",
-                                        f"--remote-debugging-port={port}", f"--user-data-dir={folder}/external",
-                                        "--no-first-run", "--no-default-browser-check", "about:blank"],
-                                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            # Launch in another process through Playwright so its platform-specific
+            # browser arguments are preserved on Linux as well as macOS. The CDP
+            # client below still attaches to an independently owned browser.
+            worker = """
+from playwright.sync_api import sync_playwright
+import sys
+with sync_playwright() as runtime:
+    context = runtime.chromium.launch_persistent_context(
+        sys.argv[1], headless=True, accept_downloads=False,
+        args=['--remote-debugging-address=127.0.0.1', '--remote-debugging-port=' + sys.argv[2]])
+    sys.stdin.read()
+    context.close()
+"""
+            errors = tempfile.TemporaryFile(mode="w+b")
+            process = subprocess.Popen([sys.executable, "-c", worker, folder + "/external", str(port)],
+                                       stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=errors)
             browser = None
             try:
                 endpoint = f"http://127.0.0.1:{port}"
@@ -173,6 +183,9 @@ class BrowserIntegrationTests(unittest.TestCase):
                             self.assertEqual(response.status, 200)
                         break
                     except OSError:
+                        if process.poll() is not None:
+                            errors.seek(0)
+                            self.fail("CDP test browser exited: " + errors.read().decode(errors="replace")[-2000:])
                         if time.monotonic() >= deadline:
                             self.fail("CDP test browser did not start")
                         time.sleep(0.1)
@@ -189,8 +202,13 @@ class BrowserIntegrationTests(unittest.TestCase):
             finally:
                 if browser:
                     browser.close()
-                process.terminate()
-                process.wait(timeout=10)
+                process.stdin.close()
+                try:
+                    process.wait(timeout=10)
+                except subprocess.TimeoutExpired:
+                    process.terminate()
+                    process.wait(timeout=10)
+                errors.close()
 
 
 if __name__ == "__main__":

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "duebridge"
-version = "0.1.0"
+version = "0.1.1"
 description = "Configurable, local-first course source collector for homework assistants"
 readme = "README.md"
 requires-python = ">=3.11"

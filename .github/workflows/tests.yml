@@ -17,6 +17,7 @@ jobs:
   browser:
     runs-on: ubuntu-latest
     strategy:
+      fail-fast: false
       matrix:
         engine: [chromium, firefox, webkit]
     steps:
