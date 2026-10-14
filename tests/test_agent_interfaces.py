@@ -31,6 +31,30 @@ class AgentInterfaces(unittest.TestCase):
         storage.save(self.config, self.source, {"pages": [{"url": self.source.home, "title": "List",
                      "fetched_at": "2026-10-14T01:00:00Z", "text": text, "scope": "Fixture rows", "itemCount": 1}]})
 
+    def test_nested_config_keeps_materials_and_report_in_workspace(self):
+        nested = self.root / "tools/duebridge"
+        nested.mkdir(parents=True)
+        (self.root / "homework.toml").rename(nested / "homework.toml")
+        config = load(self.root)
+        self.assertEqual(config.state, nested / ".homework")
+        (self.root / "materials/notes.txt").write_text("Original course material")
+        result = service.scan_materials(config, True)
+        self.assertEqual(result["indexed"], 1)
+        self.assertFalse((self.root / "homework.toml").exists())
+        record = evidence.list_evidence(config, kind="local")["items"][0]
+        self.assertIn("Original course material", evidence.read_evidence(config, record["id"])["text"])
+        self.assertIn("tools/duebridge/.homework/text/", (self.root / "DUEDATES.md").read_text())
+        with self.assertRaises(ValueError):
+            cli.init(self.root, "generic", "arc")
+        job = jobs.start(config, "scan", include_all=True)
+        self.addCleanup(jobs._children[job["id"]].wait, 5)
+        deadline = time.monotonic() + 15
+        while job["status"] not in jobs.TERMINAL and time.monotonic() < deadline:
+            time.sleep(.05)
+            job = jobs.get(config, job["id"])
+        self.assertEqual(job["status"], "completed", job)
+        self.assertTrue((nested / ".homework/jobs" / (job["id"] + ".json")).is_file())
+
     def test_evidence_pages_revision_and_no_private_paths(self):
         match = evidence.search(self.config, "Friday")["items"][0]
         self.assertTrue(match["snippet_only"])

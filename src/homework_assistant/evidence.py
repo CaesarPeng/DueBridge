@@ -15,9 +15,10 @@ KINDS = ("all", "web", "blackboard", "local", "snapshot")
 
 
 def safe_cache(config: Config, relative: str) -> Path:
-    path = config.root / relative
     if Path(relative).is_absolute() or ".." in Path(relative).parts:
         raise ValueError("缓存路径超出当前项目")
+    # Internal cache locators are independent of the configuration's location.
+    path = config.state / relative[len(".homework/"):] if relative.startswith(".homework/") else config.root / relative
     if not path.resolve().is_relative_to(config.state.resolve()):
         raise ValueError("缓存路径超出当前项目")
     current = path
@@ -124,7 +125,8 @@ def records(config: Config):
     local = read_cache(config, ".homework/local.json", {})
     for entry in local.get("entries", []):
         relative = entry.get("text", "")
-        if not re.fullmatch(r"\.homework/text/[0-9a-f]{20}\.md", relative):
+        prefix = re.escape(str(config.state.relative_to(config.root)))
+        if not re.fullmatch(prefix + r"/text/[0-9a-f]{20}\.md", relative):
             raise ValueError("本地索引指向非全文缓存；拒绝读取")
         path = safe_cache(config, relative)
         if not path.is_file():

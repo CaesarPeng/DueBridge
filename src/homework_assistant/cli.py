@@ -10,14 +10,14 @@ import sys
 
 from . import __version__
 from . import browsers, collector, evidence, jobs, local, service, storage
-from .config import Config, ENGINES, load
+from .config import Config, ENGINES, config_path, load
 
 ASSETS = Path(__file__).parent / "assets"
 
 
 def init(root: Path, preset: str, engine: str | None) -> None:
     root.mkdir(parents=True, exist_ok=True)
-    path = root / "homework.toml"
+    path = config_path(root)
     if path.exists():
         raise ValueError("homework.toml 已存在；保留现有配置，请直接编辑")
     text = (ASSETS / f"{preset}.toml").read_text(encoding="utf-8")
@@ -55,7 +55,7 @@ def doctor(root: Path) -> None:
     print(f"DueBridge {__version__}；Python {sys.version.split()[0]}")
     print("Arc：" + ("已安装" if Path("/Applications/Arc.app").is_dir() and sys.platform == "darwin" else "不可用（需要 macOS + Arc）"))
     print("Playwright：" + ("已安装" if importlib.util.find_spec("playwright") else "未安装；Arc 和本地扫描不需要"))
-    if (root / "homework.toml").exists():
+    if config_path(root).exists():
         config = load(root)
         print(f"配置有效；浏览器 {config.browser}；时区 {config.timezone}")
         for s in config.sources:

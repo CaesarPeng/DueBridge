@@ -71,10 +71,18 @@ class Config:
     local_paths: tuple[str, ...]
     sources: tuple[Source, ...]
     cdp_endpoint: str = "http://127.0.0.1:9222"
+    state_directory: str = ".homework"
 
     @property
     def state(self) -> Path:
-        return self.root / ".homework"
+        return self.root / self.state_directory
+
+
+def config_path(root: Path) -> Path:
+    """Keep course paths relative to the workspace even with a nested config."""
+    primary = root / "homework.toml"
+    nested = root / "tools" / "duebridge" / "homework.toml"
+    return nested if not primary.exists() and nested.is_file() else primary
 
 
 def relative_path(value, name: str) -> str:
@@ -102,7 +110,7 @@ def domains(values, name: str) -> tuple[str, ...]:
 
 def load(root: Path) -> Config:
     root = root.expanduser().resolve()
-    path = root / "homework.toml"
+    path = config_path(root)
     if not path.is_file():
         raise ValueError("找不到 homework.toml；先运行 homework init --preset zju，或 homework init")
     try:
@@ -192,4 +200,5 @@ def load(root: Path) -> Config:
         if not source.allows(clean):
             raise ValueError(f"{id}.home 不在配置的域名范围内")
         sources.append(source)
-    return Config(root, timezone, engine, timeout, output, local, tuple(sources), endpoint)
+    state_directory = str(path.parent.relative_to(root) / ".homework")
+    return Config(root, timezone, engine, timeout, output, local, tuple(sources), endpoint, state_directory)
