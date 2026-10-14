@@ -4,7 +4,9 @@
 
 工具只采集原文和平台原始字段。不要把日期理解、提交状态猜测、自动答题或提交作业写进采集层。
 
-新增浏览器实现 `browsers.Browser` 接口；新增平台使用独立适配器或 generic 配置。域名必须来自配置的明确名单。自动跟进仅限读取列表的请求。
+CLI-first、MCP-compatible：CLI 保留完整基础接口，MCP 仅做标准化适配；共享 service/evidence/jobs，禁止重复实现采集或日期理解。
+
+新增浏览器实现 `browsers.Browser` 接口；新增平台使用独立适配器、generic 配置或项目 adapters/ 下的 customReader。域名必须来自配置的明确名单。自动跟进仅限读取列表的请求。
 
 `.homework/`、`homework.toml`、`materials/`、`DUEDATES.md` 和浏览器会话均为用户私有数据，不能进入源码发布包。发布脚本采用文件名单，禁止递归打包整个工作目录。
 

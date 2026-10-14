@@ -70,17 +70,22 @@ def extract(path: Path) -> str:
     return text
 
 
-def scan(config: Config) -> dict:
+def scan(config: Config, include_all: bool = False) -> dict:
     files, entries, failures = set(), [], []
+    def linked(path):
+        return any(p.is_symlink() for p in (path, *path.parents) if p != config.root and p.is_relative_to(config.root))
     for relative in config.local_paths:
         directory = config.root / relative
+        if linked(directory) or not directory.resolve().is_relative_to(config.root.resolve()):
+            failures.append({"path": relative, "reason": "跳过符号链接或项目外目录"})
+            continue
         if not directory.exists():
             failures.append({"path": relative, "reason": "配置路径不存在"})
             continue
         candidates = [directory] if directory.is_file() else directory.rglob("*")
         for path in candidates:
             if path.is_file() and path.suffix.lower() in SUPPORTED and not any(p in SKIP for p in path.relative_to(config.root).parts):
-                if path.is_symlink() or not path.resolve().is_relative_to(config.root.resolve()):
+                if linked(path) or not path.resolve().is_relative_to(config.root.resolve()):
                     failures.append({"path": str(path.relative_to(config.root)), "reason": "跳过符号链接或项目外文件"})
                 elif path.name not in {"AGENTS.md", "homework.toml"} and path != config.root / config.output:
                     files.add(path)
@@ -95,17 +100,23 @@ def scan(config: Config) -> dict:
                 raise ValueError("没有可提取文字，可能需要 OCR")
             scanned += 1
             match = CUE.search(text)
-            if match is None:
+            if match is None and not include_all:
                 continue
             name = hashlib.sha256(relative.encode()).hexdigest()[:20] + ".md"
             target = config.state / "text" / name
             link = quote(os.path.relpath(path, target.parent), safe="/")
-            header = f"# {relative}\n\n[原文件]({link})\n\n读取时间：{stamp(config)}\n\n"
+            fetched = stamp(config)
+            header = f"# {relative}\n\n[原文件]({link})\n\n读取时间：{fetched}\n\n"
             write_text(target, header + text + "\n", private=True)
-            sample = re.sub(r"\s+", " ", text[max(0, match.start() - 80):match.end() + 350]).strip()
-            entries.append({"path": relative, "text": str(target.relative_to(config.root)), "sample": sample})
+            sample_text = text[max(0, match.start() - 80):match.end() + 350] if match else text[:430]
+            sample = re.sub(r"\s+", " ", sample_text).strip()
+            stat = path.stat()
+            entries.append({"path": relative, "text": str(target.relative_to(config.root)), "sample": sample,
+                            "fetched_at": fetched, "has_deadline_cue": match is not None,
+                            "fingerprint": {"size": stat.st_size, "mtime_ns": stat.st_mtime_ns}})
         except Exception as error:
             failures.append({"path": relative, "reason": f"{type(error).__name__}: {error}"})
-    data = {"scanned": scanned, "entries": entries, "failures": failures, "fetched_at": stamp(config)}
+    data = {"scanned": scanned, "entries": entries, "failures": failures, "fetched_at": stamp(config),
+            "mode": "all_documents" if include_all else "deadline_cues"}
     write_json(config.state / "local.json", data)
     return data

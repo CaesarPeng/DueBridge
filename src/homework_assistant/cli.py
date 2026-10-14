@@ -9,7 +9,7 @@ import subprocess
 import sys
 
 from . import __version__
-from . import browsers, collector, local, storage
+from . import browsers, collector, evidence, jobs, local, service, storage
 from .config import Config, ENGINES, load
 
 ASSETS = Path(__file__).parent / "assets"
@@ -29,7 +29,7 @@ def init(root: Path, preset: str, engine: str | None) -> None:
     (root / "materials").mkdir(exist_ok=True)
     ignore = root / ".gitignore"
     existing = ignore.read_text(encoding="utf-8") if ignore.exists() else ""
-    patterns = [".homework/", "homework.toml", "DUEDATES.md", "materials/", ".venv/"]
+    patterns = [".homework/", "homework.toml", "DUEDATES.md", "materials/", ".venv/", ".env", ".env.*", "storage-state*.json", "cookies*.json", "credentials*.json", "*.har"]
     missing = [p for p in patterns if p not in existing.splitlines()]
     if missing:
         storage.write_text(ignore, existing.rstrip() + "\n" + "\n".join(missing) + "\n")
@@ -37,49 +37,18 @@ def init(root: Path, preset: str, engine: str | None) -> None:
 
 
 def selected(config: Config, id: str | None):
-    if id:
-        source = next((s for s in config.sources if s.id == id), None)
-        if source is None:
-            raise ValueError(f"没有名为 {id} 的来源")
-        if not source.enabled:
-            raise ValueError(f"{id} 已禁用；请先在配置中设置 enabled = true")
-        return [source]
-    return [s for s in config.sources if s.enabled]
+    return service.select_sources(config, id)
+
+
+def print_progress(event: dict, *, json_mode: bool = False) -> None:
+    message = (event.get("source", "") + "：" + event["message"]).lstrip("：")
+    print(message, file=sys.stderr if json_mode or event.get("phase") == "error" else sys.stdout, flush=True)
 
 
 def sync(config: Config, source_id: str | None, engine: str | None, timeout: int | None) -> int:
-    sources = selected(config, source_id)
-    if not sources:
-        raise ValueError("没有启用的来源；请编辑 homework.toml")
-    config = replace(config, sources=tuple(sources))
-    seconds = config.timeout if timeout is None else timeout
-    if not 1 <= seconds <= 3600:
-        raise ValueError("timeout 必须是 1–3600 秒")
-    browser = None
-    failures = []
-    try:
-        for source in sources:
-            try:
-                if source.adapter == "blackboard" and not source.courses:
-                    raise ValueError(f"{source.id}：请配置 courses 的名称和课程 id")
-                if browser is None:
-                    browser = browsers.create(config, engine)
-                old = storage.read_json(config.state / "sources" / f"{source.id}.json", {})
-                pages = old.get("pages", []) if old.get("identity") == source.identity() else []
-                result = collector.capture(browser, source, seconds, pages)
-                storage.save(config, source, result)
-                print(f"{source.id} 已采集并保存。")
-            except (RuntimeError, ValueError, OSError) as error:
-                failures.append(source.id)
-                storage.health(config, source.id, "error", str(error))
-                print(f"{source.id}：{error}", file=sys.stderr)
-            # Preserve disabled and unselected source coverage in the report.
-            storage.render(load(config.root))
-    finally:
-        if browser:
-            browser.close()
-    print(f"已保存：{config.root / config.output}")
-    return 2 if failures else 0
+    result = service.refresh(config, source_id, engine, timeout, print_progress)
+    print(f'已保存：{config.root / config.output}')
+    return result["exit_code"]
 
 
 def doctor(root: Path) -> None:
@@ -113,14 +82,55 @@ def main(argv: list[str] | None = None) -> int:
     commands.add_parser("doctor", help="检查安装及配置，不改变安全设置")
     install = commands.add_parser("browser-install", help="安装可选的 Playwright 浏览器内核")
     install.add_argument("engine", choices=("chromium", "firefox", "webkit"))
-    update = commands.add_parser("sync", aliases=["capture"], help="采集网页来源并生成 Markdown")
+    update = commands.add_parser("sync", aliases=["capture", "refresh"], help="采集网页来源并生成 Markdown")
     update.add_argument("--source", help="仅采集一个配置来源")
     update.add_argument("--browser", choices=ENGINES)
     update.add_argument("--timeout", type=int)
+    update.add_argument("--json", action="store_true")
+    update.add_argument("--background", action="store_true", help="启动后台任务，随后用 job 查询")
     login = commands.add_parser("login", help="打开课程入口，完成正常网页登录")
     login.add_argument("source")
     login.add_argument("--browser", choices=ENGINES)
-    commands.add_parser("scan", help="扫描配置路径中的本地课程文件")
+    scan = commands.add_parser("scan", help="扫描配置路径中的本地课程文件")
+    scan.add_argument("--all", action="store_true", help="保留全部支持的资料，不限截止关键词")
+    scan.add_argument("--json", action="store_true")
+    scan.add_argument("--background", action="store_true")
+    overview = commands.add_parser("overview", help="结构化检查来源覆盖、缓存年龄及失败")
+    overview.add_argument("--max-age-hours", type=float, default=24)
+    listing = commands.add_parser("evidence", help="列出证据编号与来源；默认不含结构诊断快照")
+    listing.add_argument("--source")
+    listing.add_argument("--kind", choices=evidence.KINDS, default="all")
+    listing.add_argument("--offset", type=int, default=0)
+    listing.add_argument("--limit", type=int, default=50)
+    search = commands.add_parser("search", help="按原文关键词搜索已保存资料")
+    search.add_argument("query")
+    search.add_argument("--source")
+    search.add_argument("--kind", choices=evidence.KINDS, default="all")
+    search.add_argument("--limit", type=int, default=20)
+    read = commands.add_parser("read", help="按证据编号分页读取完整资料")
+    read.add_argument("evidence_id")
+    read.add_argument("--offset", type=int, default=0)
+    read.add_argument("--max-chars", type=int, default=16000)
+    read.add_argument("--revision")
+    job = commands.add_parser("job", help="查询后台任务及登录/保存状态")
+    job.add_argument("job_id")
+    inspect_site = commands.add_parser("inspect", help="保存清理过的 DOM 结构快照，供 Agent 开发小众网站适配器")
+    inspect_site.add_argument("source")
+    inspect_site.add_argument("--browser", choices=ENGINES)
+    inspect_site.add_argument("--timeout", type=int)
+    inspect_site.add_argument("--background", action="store_true")
+    inspect_site.add_argument("--json", action="store_true")
+    adapter = commands.add_parser("adapter-check", help="离线检查本地 HTML 样例的适配器输出，不访问真实站点")
+    adapter.add_argument("source")
+    adapter.add_argument("--html", type=Path, required=True)
+    adapter.add_argument("--url", required=True)
+    adapter.add_argument("--engine", choices=("chromium", "firefox", "webkit"), default="chromium")
+    mcp = commands.add_parser("mcp", help="可选的 MCP 标准化适配层")
+    mcp_commands = mcp.add_subparsers(dest="mcp_command", required=True)
+    serve = mcp_commands.add_parser("serve", help="通过本地 stdio 提供 MCP，默认仅读取缓存")
+    serve.add_argument("--allow-refresh", action="store_true", help="允许启动浏览器采集、本地扫描和结构检查任务")
+    mcp_config = mcp_commands.add_parser("config", help="生成通用 MCP 客户端配置，不更改客户端设置")
+    mcp_config.add_argument("--allow-refresh", action="store_true")
     commands.add_parser("status", help="列出独立抓取时间和最近错误")
     show = commands.add_parser("show", help="查看现有 Markdown 或原始 JSON")
     show.add_argument("--json", action="store_true", help="输出原始资料、健康状态和本地索引")
@@ -138,12 +148,65 @@ def main(argv: list[str] | None = None) -> int:
                 raise ValueError('请先安装可选依赖：python -m pip install ".[browser]"')
             return subprocess.run([sys.executable, "-m", "playwright", "install", args.engine]).returncode
         config = load(root)
-        if args.command in {"sync", "capture"}:
+        def output(data):
+            print(json.dumps(data, ensure_ascii=False, indent=2))
+        if args.command == "mcp":
+            if args.mcp_command == "config":
+                arguments = ["-m", "homework_assistant", "--project", str(root), "mcp", "serve"]
+                if args.allow_refresh:
+                    arguments.append("--allow-refresh")
+                output({"mcpServers": {"duebridge": {"command": sys.executable, "args": arguments}}})
+            else:
+                from .mcp_server import serve
+                serve(root, args.allow_refresh)
+            return 0
+        if args.command == "overview":
+            output(evidence.overview(config, args.max_age_hours))
+            return 0
+        if args.command == "evidence":
+            output(evidence.list_evidence(config, args.source, args.kind, args.offset, args.limit))
+            return 0
+        if args.command == "search":
+            output(evidence.search(config, args.query, args.source, args.kind, args.limit))
+            return 0
+        if args.command == "read":
+            output(evidence.read_evidence(config, args.evidence_id, args.offset, args.max_chars, args.revision))
+            return 0
+        if args.command == "job":
+            output(jobs.get(config, args.job_id))
+            return 0
+        if args.command == "adapter-check":
+            from .adapters import check_fixture
+            output(check_fixture(config, args.source, args.html, args.url, args.engine))
+            return 0
+        if args.command in {"sync", "capture", "refresh"}:
+            if args.background:
+                output(jobs.start(config, "refresh", args.source, args.browser, args.timeout))
+                return 0
+            if args.json:
+                result = service.refresh(config, args.source, args.browser, args.timeout,
+                                         lambda event: print_progress(event, json_mode=True))
+                output(result)
+                return result["exit_code"]
             return sync(config, args.source, args.browser, args.timeout)
         if args.command == "scan":
-            result = local.scan(config)
-            print(f"已保存：{storage.render(config)}；全文 {len(result['entries'])} 份，读取失败 {len(result['failures'])} 份。")
-            return 2 if result["failures"] else 0
+            if args.background:
+                output(jobs.start(config, "scan", include_all=args.all))
+                return 0
+            result = service.scan_materials(config, args.all)
+            if args.json:
+                output(result)
+            else:
+                print(f"已保存：{config.root / config.output}；全文 {result['indexed']} 份，读取失败 {len(result['failures'])} 份。")
+            return result["exit_code"]
+        if args.command == "inspect":
+            if args.background:
+                output(jobs.start(config, "inspect", args.source, args.browser, args.timeout))
+                return 0
+            result = service.inspect_source(config, args.source, args.browser, args.timeout,
+                                            lambda event: print_progress(event, json_mode=args.json))
+            output(result)
+            return result["exit_code"]
         if args.command == "login":
             source = selected(config, args.source)[0]
             browser = browsers.create(replace(config, sources=(source,)), args.browser)

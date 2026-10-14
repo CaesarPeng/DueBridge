@@ -1,0 +1,25 @@
+timezone = "Asia/Shanghai"
+output = "DUEDATES.md"
+
+[browser]
+engine = "arc"
+timeout = 180
+
+[local]
+paths = ["materials"]
+
+# 复制模板为项目 adapters/site.js，替换域名/选择器后再启用。
+[[sources]]
+id = "niche-site"
+adapter = "custom"
+enabled = false
+home = "https://courses.example.edu/courses"
+domains = ["courses.example.edu"]
+reader = "adapters/site.js"
+
+[sources.options]
+selector = ".assignment-row"
+empty_selector = ".no-assignments"
+list_links = "a.list"
+list_url_pattern = "^https://courses\\.example\\.edu/(courses|assignments)(?:[/?]|$)"
+max_pages = "40"

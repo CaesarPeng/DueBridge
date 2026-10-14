@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 import secrets
 import time
+from typing import Callable
 from urllib.parse import urlsplit
 
 from .browsers import Browser
@@ -12,10 +13,16 @@ from .config import Source, clean_url
 ASSETS = Path(__file__).parent / "assets"
 
 
+def parser_script(source: Source) -> str:
+    return ("const SOURCE_CONFIG=" + json.dumps(source.job_config()) + ";"
+            + "let customReader=null;" + source.reader_code + "\n"
+            + (ASSETS / "sites.js").read_text(encoding="utf-8"))
+
+
 def job_script(source: Source, key: str, seeds: list[str]) -> str:
     config = source.job_config()
     config["seeds"] = [clean_url(u) for u in seeds if source.allows(u, assignment=True)]
-    parser = (ASSETS / "sites.js").read_text(encoding="utf-8")
+    parser = "let customReader=null;" + source.reader_code + "\n" + (ASSETS / "sites.js").read_text(encoding="utf-8")
     collector = (ASSETS / "collector.js").read_text(encoding="utf-8")
     return ("(()=>{const SOURCE_CONFIG=" + json.dumps(config) + ";" + parser + "\n" + collector
             + "\nconst key=" + json.dumps(key) + ";window[key]={phase:'running'};"
@@ -24,7 +31,11 @@ def job_script(source: Source, key: str, seeds: list[str]) -> str:
             + "return 'started';})()")
 
 
-def capture(browser: Browser, source: Source, timeout: int, old_pages: list[dict] | None = None) -> dict:
+def capture(browser: Browser, source: Source, timeout: int, old_pages: list[dict] | None = None,
+            progress: Callable[[dict], None] | None = None) -> dict:
+    def report(phase, message):
+        if progress:
+            progress({"source": source.id, "phase": phase, "message": message})
     if source.adapter == "blackboard" and not source.courses:
         raise ValueError(f"{source.id}：请在 homework.toml 中配置 courses，课程 id 来自课程页面 URL 的 course_id")
     if source.adapter == "generic" and not source.options.get("selector"):
@@ -40,10 +51,10 @@ def capture(browser: Browser, source: Source, timeout: int, old_pages: list[dict
             if not eligible and not opened:
                 if not tabs:
                     browser.open(source.home)
-                    print(f"已打开 {source.id}；请在浏览器中登录并进入课程作业列表。", flush=True)
+                    report("waiting_for_user", "已打开入口；请在浏览器中登录并进入课程作业列表")
                 else:
                     browser.focus(tabs[0])
-                    print(f"{source.id}：请从入口进入实际作业列表。", flush=True)
+                    report("waiting_for_user", "请从入口进入实际作业列表")
                 opened = True
             groups = {}
             for tab in eligible:
@@ -60,6 +71,7 @@ def capture(browser: Browser, source: Source, timeout: int, old_pages: list[dict
                         focused.add(tab.id)
                     seeds = [t.url for t in group] + [p["url"] for p in old_pages or [] if source.allows(p["url"])]
                     browser.execute(tab, job_script(source, key, seeds))
+                    report("collecting", "正在读取课程列表")
                     jobs[origin] = {"signature": signature, "tab": tab}
                     continue
                 value = json.loads(browser.execute(tab, "JSON.stringify(window[" + json.dumps(key) + "]||null)") or "null")
@@ -70,16 +82,17 @@ def capture(browser: Browser, source: Source, timeout: int, old_pages: list[dict
                     if result.get("waiting"):
                         message = result.get("message", "请先登录课程页面")
                         if message != last_message:
-                            print(f"{source.id}：{message}；本次运行会继续等待。", flush=True)
+                            report("waiting_for_user", message + "；本次运行会继续等待")
                             last_message = message
                         jobs.pop(origin, None)
                     else:
-                        completed.append(result)
+                        completed.append({**result, "_origin": origin})
             if completed and len(completed) == len(groups):
                 if source.adapter == "blackboard":
                     return completed[0]
                 return {"pages": [p for r in completed for p in r.get("pages", [])],
-                        "warnings": [m for r in completed for m in r.get("warnings", [])]}
+                        "warnings": [m for r in completed for m in r.get("warnings", [])],
+                        "diagnostics": {"origins": [{"origin": r["_origin"], **r.get("diagnostics", {})} for r in completed]}}
             browser.pause(min(1, max(0, deadline - time.monotonic())))
         raise RuntimeError(f"{source.id} 等待登录或完整作业列表超时；旧资料保留")
     finally:

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import argparse
 from pathlib import Path
 import re
 import subprocess
@@ -11,7 +12,7 @@ import tarfile
 from zipfile import ZipFile, ZipInfo, ZIP_DEFLATED
 
 ROOT = Path(__file__).resolve().parents[1]
-VERSION = "0.1.1"
+VERSION = "0.2.0"
 TOP = f"duebridge-{VERSION}"
 FIXED = ("pyproject.toml", "MANIFEST.in", ".gitignore", "README.md", "LICENSE", "AGENTS.md",
          "CONTRIBUTING.md", "VALIDATION.md", "install.sh", "duebridge", "homework", "scripts/package.py", ".github/workflows/tests.yml")
@@ -20,7 +21,7 @@ FIXED = ("pyproject.toml", "MANIFEST.in", ".gitignore", "README.md", "LICENSE", 
 def sources() -> list[Path]:
     files = [ROOT / name for name in FIXED]
     for folder, extensions in (("src/homework_assistant", {".py", ".js", ".applescript", ".toml"}),
-                               ("tests", {".py"}), ("examples", {".toml"})):
+                               ("tests", {".py"}), ("examples", {".toml"}), ("docs", {".md"})):
         files.extend(p for p in (ROOT / folder).rglob("*") if p.is_file() and p.suffix in extensions and "__pycache__" not in p.parts)
     return sorted(set(files))
 
@@ -37,6 +38,9 @@ def audit(name: str, content: bytes) -> None:
 
 
 def main() -> None:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--no-isolation", action="store_true", help="Use installed build dependencies; default uses an isolated build environment")
+    args = parser.parse_args()
     files = sources()
     for file in files:
         audit(str(file.relative_to(ROOT)), file.read_bytes())
@@ -50,7 +54,10 @@ def main() -> None:
             executable = file.name in {"duebridge", "homework", "install.sh", "package.py"}
             entry.external_attr = (0o100755 if executable else 0o100644) << 16
             zipfile.writestr(entry, file.read_bytes())
-    subprocess.run([sys.executable, "-m", "build", "--outdir", str(dist)], cwd=ROOT, check=True)
+    command = [sys.executable, "-m", "build", "--outdir", str(dist)]
+    if args.no_isolation:
+        command.append("--no-isolation")
+    subprocess.run(command, cwd=ROOT, check=True)
     outputs = [archive]
     for file in sorted(dist.glob(f"duebridge-{VERSION}-*.whl")):
         with ZipFile(file) as wheel:

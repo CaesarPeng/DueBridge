@@ -12,7 +12,7 @@ async function collectSource(config) {
   let current;
   try{current=parseCourseHTML({html:snapshot.outerHTML,url:location.href,platform:id});}
   catch(e){
-    if(id==='generic')return {waiting:true,message:'页面选择规则无效或未匹配，请检查 options.selector / list_url_pattern'};
+    if(id==='generic'||id==='custom')return {waiting:true,message:'页面选择规则/适配器无效或未匹配，请先 inspect 并核对读取接口'};
     current={links:[],warnings:[],text:''};
   }
   if(current.requiresLogin)return {waiting:true,message:'请在浏览器中正常登录'};
@@ -48,7 +48,7 @@ async function collectSource(config) {
   }
   function listURL(raw){
     const u=new URL(raw,origin);if(u.origin!==origin)return null;
-    if(id==='generic')return platformFor(u.href)?u.href:null;
+    if(id==='generic'||id==='custom')return safeListLink(u.href,location.href);
     if(id==='smartphysics')return u.searchParams.has('enrollmentID')?origin+'/Course?enrollmentID='+encodeURIComponent(u.searchParams.get('enrollmentID')):origin+'/';
     if(id==='zjuilearn'||id==='prairielearn'){
       const course=/\/pl\/course_instance\/(\d+)/.exec(u.pathname)?.[1];
@@ -65,17 +65,18 @@ async function collectSource(config) {
   const seeds=[...config.seeds,location.href];
   if(id==='smartphysics')seeds.unshift(origin+'/',config.home);
   if(id==='zjuilearn'||id==='prairielearn')seeds.unshift(origin+'/pl/');
-  const queue=seeds.map(listURL).filter(Boolean),seen=new Set(),pages=[],warnings=[];
+  const queue=seeds.map(listURL).filter(Boolean),seen=new Set(),pages=[],warnings=[...(current.warnings||[])];
+  const maxPages=Math.min(100,Math.max(1,Number(config.options?.max_pages)||30));
   if(id==='webassign')queue.push(...(current.links||[]));
-  function isList(c){return id==='generic'?(c.itemCount>0||c.empty):id==='smartphysics'?c.itemCount>0:id==='zjuilearn'||id==='prairielearn'?/\/assessments\/?$/.test(new URL(c.url).pathname):!c.navigationOnly&&!!c.text;}
-  if((id==='smartphysics'||id==='generic')&&isList(current)){
+  function isList(c){return id==='generic'||id==='custom'?(c.itemCount>0||c.empty):id==='smartphysics'?c.itemCount>0:id==='zjuilearn'||id==='prairielearn'?/\/assessments\/?$/.test(new URL(c.url).pathname):!c.navigationOnly&&!!c.text;}
+  if((id==='smartphysics'||id==='generic'||id==='custom')&&isList(current)){
     if(id==='smartphysics')current.scope='当前课程页面的全部 DOM 作业行，包含未展开单元';
     pages.push(current);seen.add(cleanURL(location.href));
   }
-  if(id==='generic')queue.push(...(current.links||[]));
+  if(id==='generic'||id==='custom')queue.push(...(current.links||[]));
   // SmartPhysics ships its full unit rows in the loaded course DOM. Other
   // lists are refreshed by GET; dynamic WebAssign can fall back to its DOM.
-  while(queue.length&&seen.size<30){
+  while(queue.length&&seen.size<maxPages){
     const raw=queue.shift(),key=cleanURL(raw);if(seen.has(key))continue;seen.add(key);
     try{
       const c=await get(raw);
@@ -87,12 +88,14 @@ async function collectSource(config) {
         ?'课程入口的后台请求未成功；已打开课程的全部作业行已读取，其他课程覆盖需核对':e.message);
     }
   }
-  if(queue.length)warnings.push('达到 30 页读取上限，尚有列表页未核对');
+  const remaining=[...new Set(queue.map(cleanURL))].filter(key=>!seen.has(key));
+  if(remaining.length)warnings.push('达到 '+maxPages+' 页读取上限，尚有列表页未核对');
   if(id==='webassign'&&!pages.length&&isList(current)){
     current.scope='当前浏览器已加载的 WebAssign 动态作业列表；二级列表覆盖需核对';
     pages.push(current);
     warnings.push('WebAssign 从已打开的动态列表读取；服务器 HTML 未提供完整列表，二级列表覆盖需核对');
   }
   if(!pages.length)return {waiting:true,message:warnings[0]||'请进入课程作业列表'};
-  return {pages:pages.map(({links,...c})=>c),warnings:[...new Set(warnings)]};
+  return {pages:pages.map(({links,...c})=>c),warnings:[...new Set(warnings)],
+          diagnostics:{visited_pages:seen.size,remaining_queue:remaining.length,page_limit:maxPages}};
 }

@@ -9,9 +9,10 @@ import sys
 import tempfile
 import time
 import unittest
+from unittest.mock import patch
 from urllib.request import urlopen
 
-from homework_assistant import collector
+from homework_assistant import adapters, collector, evidence, service, storage
 from homework_assistant.config import Config, Source
 from homework_assistant.browsers.playwright import PlaywrightBrowser
 
@@ -20,6 +21,88 @@ ENGINES = tuple(x for x in os.environ.get("HOMEWORK_TEST_ENGINES", "").split(","
 
 @unittest.skipUnless(ENGINES, "Set HOMEWORK_TEST_ENGINES=chromium,firefox,webkit to run browser fixtures")
 class BrowserIntegrationTests(unittest.TestCase):
+    def test_login_waiting_resumes_after_page_changes(self):
+        for engine in ENGINES:
+            with self.subTest(engine=engine), tempfile.TemporaryDirectory() as folder:
+                source = Source("generic", "generic", "https://courses.example.edu/list", ("courses.example.edu",), options={"selector": ".hw"})
+                config = Config(Path(folder), "Asia/Shanghai", engine, 8, "DUEDATES.md", (), (source,))
+                browser = PlaywrightBrowser(config, engine, headless=True)
+                try:
+                    browser.context.route("https://**/*", lambda route: route.fulfill(content_type="text/html", body='<title>Login</title><input type="password">'))
+                    browser.open(source.home)
+                    events = []
+                    def report(event):
+                        events.append(event)
+                        if event["phase"] == "waiting_for_user":
+                            # Simulate normal user login finishing in the same page/session.
+                            next(p for p in browser.context.pages if p.url == source.home).set_content('<title>List</title><div class="hw" hidden>After login due Friday</div>')
+                    result = collector.capture(browser, source, 8, progress=report)
+                    self.assertIn("After login", result["pages"][0]["text"])
+                    self.assertTrue(any(e["phase"] == "waiting_for_user" for e in events))
+                finally:
+                    browser.close()
+
+    def test_page_limit_keeps_explicit_partial_coverage_diagnostics(self):
+        for engine in ENGINES:
+            with self.subTest(engine=engine):
+                source = Source("generic", "generic", "https://courses.example.edu/list", ("courses.example.edu",), options={
+                    "selector": ".hw", "list_links": "a.list", "list_url_pattern": "^https://courses\\.example\\.edu/", "max_pages": "1"})
+                result = self.run_fixture(engine, source, lambda route: route.fulfill(content_type="text/html", body='<title>List</title><div class="hw">HW due Friday</div><a class="list" href="/next">Next</a>'), source.home)
+                self.assertEqual(len(result["pages"]), 1)
+                self.assertTrue(any("读取上限" in w for w in result["warnings"]))
+                self.assertEqual(result["diagnostics"]["origins"][0]["remaining_queue"], 1)
+
+    def test_custom_reader_secondary_lists_hidden_rows_and_offline_fixture(self):
+        for engine in ENGINES:
+            with self.subTest(engine=engine):
+                reader = (collector.ASSETS / "custom-reader.js").read_text()
+                source = Source("niche", "custom", "https://courses.example.edu/list", ("courses.example.edu",),
+                                options={"selector": ".hw", "list_links": "a.list", "list_url_pattern": "^https://courses\\.example\\.edu/"}, reader_code=reader)
+                requests = []
+                def handle(route):
+                    requests.append(route.request.url)
+                    body = '<title>Niche</title><div class="hw" style="display:none">HW due Friday</div><a class="list" href="/next">Next course</a><a class="list" href="/exam/42">Exam</a>'
+                    route.fulfill(content_type="text/html", body=body)
+                result = self.run_fixture(engine, source, handle, source.home)
+                self.assertEqual(len(result["pages"]), 2)
+                self.assertTrue(all(p["itemCount"] == 1 for p in result["pages"]))
+                self.assertFalse(any("/exam/" in u for u in requests))
+                with tempfile.TemporaryDirectory() as folder:
+                    config = Config(Path(folder), "Asia/Shanghai", engine, 5, "DUEDATES.md", (), (source,))
+                    fixture = Path(folder) / "list.html"
+                    fixture.write_text('<title>Niche</title><div class="hw" hidden>Raw Friday</div><img src="https://outside.example/tracker">')
+                    checked = adapters.check_fixture(config, source.id, fixture, source.home, engine)
+                    self.assertEqual(checked["network"], "blocked")
+                    self.assertIn("Raw Friday", checked["result"]["text"])
+                    self.assertFalse((config.state / "sources/niche.json").exists())
+
+    def test_inspection_preserves_hidden_structure_removes_credentials_and_keeps_capture_time(self):
+        for engine in ENGINES:
+            with self.subTest(engine=engine), tempfile.TemporaryDirectory() as folder:
+                source = Source("niche", "generic", "https://courses.example.edu/list", ("courses.example.edu",), options={"selector": ".hw"})
+                config = Config(Path(folder).resolve(), "Asia/Shanghai", engine, 5, "DUEDATES.md", (), (source,))
+                storage.save(config, source, {"pages": [{"url": source.home, "title": "Old list", "text": "Prior capture",
+                    "fetched_at": "2026-10-13T01:00:00Z", "scope": "Old rows", "itemCount": 1}]})
+                before = (config.state / "sources/niche.json").read_bytes()
+                browser = PlaywrightBrowser(config, engine, headless=True)
+                browser.context.route("https://**/*", lambda route: route.fulfill(content_type="text/html", body='''
+                  <title>Niche</title><div class="hw" hidden data-token="PRIVATE_TOKEN">Hidden row</div>
+                  <input type="password" value="PRIVATE_PASSWORD"><script>var secret='PRIVATE_SCRIPT';</script>
+                  <a href="/next?course=1&amp;token=PRIVATE_QUERY" onclick="PRIVATE_EVENT">Next</a>
+                  <iframe src="https://outside.example/"></iframe>'''))
+                browser.open(source.home)
+                with patch("homework_assistant.service.browsers.create", return_value=browser):
+                    result = service.inspect_source(config, source.id)
+                self.assertEqual(result["saved_snapshots"], 1)
+                self.assertEqual((config.state / "sources/niche.json").read_bytes(), before)
+                snapshot = evidence.list_evidence(config, kind="snapshot")["items"][0]
+                full = evidence.read_evidence(config, snapshot["id"])
+                self.assertIn("Hidden row", full["text"])
+                self.assertIn("hidden", full["text"])
+                self.assertNotIn("PRIVATE_", full["text"])
+                self.assertEqual(full["diagnostics"]["omitted_iframes"], 1)
+                self.assertEqual(evidence.list_evidence(config)["total"], 1)
+
     def run_fixture(self, engine, source, route_handler, initial):
         with tempfile.TemporaryDirectory() as folder:
             config = Config(Path(folder), "Asia/Shanghai", engine, 5, "DUEDATES.md", ("materials",), (source,))

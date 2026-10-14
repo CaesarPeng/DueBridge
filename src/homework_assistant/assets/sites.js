@@ -34,9 +34,27 @@ function plain(node){
 }
 function tips(doc){return [...doc.querySelectorAll('[data-content],[data-bs-content],[data-original-title]')].map(e=>plain(new DOMParser().parseFromString(e.getAttribute('data-content')||e.getAttribute('data-bs-content')||e.getAttribute('data-original-title')||'','text/html').body)).filter(Boolean);}
 function safeLink(raw,base){try{const u=new URL(raw,base);if(u.origin===new URL(base).origin&&platformFor(u.href))return u.href;}catch{}return null;}
+function safeListLink(raw,base){
+  const target=safeLink(raw,base);if(!target)return null;
+  if(/(?:assessment_instance|question|submit|submission|exam|answer)(?:[/?=&_]|$)/i.test(target))return null;
+  const pattern=SOURCE_CONFIG.options?.list_url_pattern;
+  if(pattern&&!new RegExp(pattern).test(target))return null;
+  return target;
+}
+function sanitizeHTML(doc,base){
+  const copy=doc.documentElement.cloneNode(true);
+  copy.querySelectorAll('script,style,input,textarea,select,iframe,object,embed,meta,base').forEach(n=>n.remove());
+  for(const node of [copy,...copy.querySelectorAll('*')])for(const attr of [...node.attributes]){
+    if(/^on/i.test(attr.name)||/(?:password|token|session|csrf|authorization|nonce)/i.test(attr.name))node.removeAttribute(attr.name);
+    else if(['href','src','action','formaction'].includes(attr.name)){
+      try{node.setAttribute(attr.name,cleanURL(new URL(attr.value,base).href));}catch{node.removeAttribute(attr.name);}
+    }else if(attr.name==='style'&&/url\s*\(/i.test(attr.value))node.removeAttribute(attr.name);
+  }
+  return copy.outerHTML;
+}
 function login(doc,url){
   const content=doc.body?.textContent||'';
-  const configured=SOURCE_CONFIG.platform==='generic'&&SOURCE_CONFIG.options;
+  const configured=['generic','custom'].includes(SOURCE_CONFIG.platform)&&SOURCE_CONFIG.options;
   const genericRows=configured&&((configured.selector&&doc.querySelector(configured.selector))||(configured.empty_selector&&doc.querySelector(configured.empty_selector)));
   const hasRows=!!genericRows||!!doc.querySelector('.unit-assignment,.course-title a[href*="Course"],a[href*="/pl/course_instance/"]') || /Available credit|My Assignments/.test(content);
   const signIn=[...doc.querySelectorAll('a,button')].some(e=>/^(sign\s*in|log\s*in|登录)/i.test(plain(e)));
@@ -49,7 +67,14 @@ function parseCourseHTML({html,url,platform=platformFor(url)}) {
   const extra=tips(doc);if(extra.length)result.text+='\n\n提示框原文：\n'+[...new Set(extra)].join('\n\n');
   const dateMeta=[...doc.querySelectorAll('.duedate,[datetime],[data-timezone],[data-zone]')].flatMap(e=>['datetime','data-date','data-start','data-due','data-timezone','data-zone','title'].map(key=>e.hasAttribute(key)?`${key}: ${e.getAttribute(key)}`:'').filter(Boolean));
   const links=new Set();
-  if(platform==='generic') {
+  if(platform==='custom') {
+    if(!customReader||typeof customReader.parse!=='function')throw Error('customReader.parse 未定义');
+    const value=customReader.parse(doc,url,{plain,cleanURL,safeListLink,options:SOURCE_CONFIG.options||{}});
+    if(!value||typeof value.text!=='string'||!Number.isInteger(value.itemCount)||value.itemCount<0||typeof value.scope!=='string')throw Error('customReader 返回值需要 text、itemCount、scope');
+    Object.assign(result,{text:value.text,itemCount:value.itemCount,scope:value.scope,empty:value.empty===true});
+    result.warnings.push(...(Array.isArray(value.warnings)?value.warnings.map(String):[]));
+    for(const raw of value.links||[]){const target=safeListLink(raw,url);if(target)links.add(target);else result.warnings.push('适配器的链接被来源/列表限制排除，需要核对覆盖');}
+  } else if(platform==='generic') {
     const options=SOURCE_CONFIG.options||{};
     if(!options.selector)throw Error('generic 适配器需要 options.selector');
     const rows=[...doc.querySelectorAll(options.selector)];
@@ -104,6 +129,8 @@ function parseCourseHTML({html,url,platform=platformFor(url)}) {
     }
   }
   if(dateMeta.length)result.text+='\n\n页面日期属性原文：\n'+[...new Set(dateMeta)].join('\n');
-  const here=new URL(url);here.hash='';links.delete(here.href);result.links=[...links].slice(0,25);
+  const here=new URL(url);here.hash='';links.delete(here.href);
+  if(links.size>25)result.warnings.push('当前页列表链接超过 25 条，尚有链接未读取');
+  result.links=[...links].slice(0,25);
   return result;
 }

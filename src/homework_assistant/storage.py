@@ -79,7 +79,8 @@ def save(config: Config, source: Source, result: dict) -> dict:
             if previous is None or timestamp(page["fetched_at"]) >= timestamp(previous["fetched_at"]):
                 pages[page["url"]] = page
         data = {"pages": list(pages.values()), "fetched_at": max((p["fetched_at"] for p in pages.values()), key=timestamp)}
-    data.update({"identity": source.identity(), "warnings": warnings, "home": source.home})
+    data.update({"identity": source.identity(), "warnings": warnings, "home": source.home,
+                 "diagnostics": result.get("diagnostics", {})})
     write_json(path, data)
     health(config, source.id, "partial" if warnings else "ok", "；".join(warnings) or "已保存课程列表原文")
     return data
@@ -138,7 +139,8 @@ def render(config: Config) -> Path:
             bodies.extend(["读取限制：" + "；".join(data["warnings"]), ""])
     out.extend(bodies)
     local = read_json(config.state / "local.json", {})
-    out.extend(["", "## 本地全文索引", "", f"已读取 {local.get('scanned', 0)} 份文件；保留 {len(local.get('entries', []))} 份含截止日期关键词的全文。未做 OCR。", ""])
+    mode = "全部支持的配置资料" if local.get("mode") == "all_documents" else "截止日期关键词筛选"
+    out.extend(["", "## 本地全文索引", "", f"已读取 {local.get('scanned', 0)} 份文件；保留 {len(local.get('entries', []))} 份全文。范围：{mode}；未做 OCR。", ""])
     from urllib.parse import quote
     for entry in local.get("entries", []):
         link = os.path.relpath(config.root / entry["text"], (config.root / config.output).parent)

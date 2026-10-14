@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import hashlib
 import json
 from pathlib import Path
 import re
@@ -9,7 +10,7 @@ from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 ENGINES = ("arc", "chromium", "chrome", "edge", "firefox", "webkit", "cdp")
-ADAPTERS = ("blackboard", "webassign", "smartphysics", "zjuilearn", "prairielearn", "generic")
+ADAPTERS = ("blackboard", "webassign", "smartphysics", "zjuilearn", "prairielearn", "generic", "custom")
 PRIVATE = frozenset("userpass password passwd auth authorization access_token id_token refresh_token token session sessionid sid code state ticket csrf csrf_token signature".split())
 
 
@@ -36,6 +37,7 @@ class Source:
     courses: tuple[dict, ...] = ()
     enabled: bool = True
     options: dict = field(default_factory=dict)
+    reader_code: str = ""
 
     def allows(self, url: str, *, assignment: bool = False) -> bool:
         try:
@@ -51,7 +53,12 @@ class Source:
                 "courses": self.courses, "options": self.options}
 
     def identity(self) -> dict:
-        return {"adapter": self.adapter, "domains": list(self.domains)}
+        result = {"adapter": self.adapter, "domains": list(self.domains)}
+        if self.adapter in {"generic", "custom"}:
+            result["options"] = self.options
+        if self.adapter == "custom":
+            result["reader_revision"] = hashlib.sha256(self.reader_code.encode()).hexdigest()
+        return result
 
 
 @dataclass(frozen=True)
@@ -164,10 +171,24 @@ def load(root: Path) -> Config:
         options = raw.get("options", {})
         if not isinstance(options, dict) or any(not isinstance(v, str) for v in options.values()):
             raise ValueError(f"{id}.options 必须是字符串配置表")
-        allowed_options = {"selector", "empty_selector", "list_links", "list_url_pattern"}
-        if set(options) - allowed_options:
+        allowed_options = {"selector", "empty_selector", "list_links", "list_url_pattern", "max_pages"}
+        if adapter != "custom" and set(options) - allowed_options:
             raise ValueError(f"{id}.options 包含未知字段")
-        source = Source(id, adapter, clean, allowed, assignment, tuple(courses), enabled, options)
+        if "max_pages" in options and (not options["max_pages"].isdigit() or not 1 <= int(options["max_pages"]) <= 100):
+            raise ValueError(f"{id}.options.max_pages 必须是字符串形式的 1–100")
+        code = ""
+        if adapter == "custom":
+            relative = relative_path(raw.get("reader", ""), f"{id}.reader")
+            reader = root / relative
+            if not relative.startswith("adapters/") or reader.suffix != ".js":
+                raise ValueError(f"{id}.reader 必须位于项目 adapters/ 下，且为 .js")
+            if not reader.resolve().is_relative_to(root / "adapters") or reader.is_symlink():
+                raise ValueError("自定义适配器不能通过符号链接加载")
+            if enabled:
+                if not reader.is_file() or reader.stat().st_size > 200_000:
+                    raise ValueError(f"{id}.reader 不存在或超过 200 KB")
+                code = reader.read_text(encoding="utf-8")
+        source = Source(id, adapter, clean, allowed, assignment, tuple(courses), enabled, options, code)
         if not source.allows(clean):
             raise ValueError(f"{id}.home 不在配置的域名范围内")
         sources.append(source)

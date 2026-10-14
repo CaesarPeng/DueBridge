@@ -1,10 +1,10 @@
 # DueBridge
 
-A configurable, local-first homework assistant with multi-browser and LMS adapters.
+CLI-first, MCP-compatible browser collection and material-reading tools for AI agents.
 
-一个可以定制学校平台和浏览器的本地作业资料助手。它将网页列表及本地课程文件保存为 `DUEDATES.md` 和原始 JSON，供人或 AI 助手核对截止日期。运行时不需要 Codex，不调用模型、不上传资料，也不自动答题或提交作业。
+一个可以定制学校平台和浏览器的本地作业资料助手。它将网页列表及本地课程文件保存为 `DUEDATES.md` 和原始 JSON，供人或 AI 助手读取资料、核对截止日期。运行时不需要特定 Agent，不调用模型或上传服务，不自动答题或提交作业。MCP 将选取的资料返回客户端，后续数据处理取决于客户端配置。
 
-**Python 3.11+。Arc 接入限 macOS；Chromium、Firefox、WebKit 接入使用 Playwright，适用于其支持的系统。当前版本 0.1.1。**
+**Python 3.11+。Arc 接入限 macOS；Chromium、Firefox、WebKit 接入使用 Playwright，适用于其支持的系统。当前版本 0.2.0。**
 
 ## 安装与快速开始
 
@@ -33,6 +33,34 @@ duebridge show
 `init --preset zju` 生成 Blackboard、WebAssign、SmartPhysics、ZJUI Learn 和 PrairieLearn 配置；没有个人课程编号和抓取缓存。Blackboard 默认禁用，填写自己的 `courses` 后启用。PrairieLearn 默认禁用只是配置选择，**不代表本学期没有作业**。不同学期应自行核对平台和课程。
 
 首次用 Arc 时，在 macOS 的自动化权限中允许当前终端控制 Arc，并在 Arc 菜单 **View → Developer → Allow JavaScript from Apple Events** 中手动启用。该设置允许获准的自动化程序执行网页脚本；本工具不会自动更改它。登录过期时在 Arc 中正常登录，CLI 会在等待时间内继续采集。
+
+## CLI 与 MCP
+
+CLI 是完整基础接口；MCP 是面向 Agent 的标准化适配层。两者直接调用同一套 Python 服务、浏览器后端、证据读取和任务逻辑，MCP 不重复实现采集，也不绕回子进程解析 CLI 文本。后台任务使用共同 worker。
+
+```sh
+duebridge refresh --source smartphysics --background
+duebridge job job_REPLACE_WITH_RETURNED_ID
+duebridge scan --all --json
+duebridge overview
+duebridge evidence
+duebridge search "late policy"
+duebridge read ev_REPLACE_WITH_RETURNED_ID --max-chars 16000
+```
+
+`refresh`、`capture` 是 `sync` 的别名。`overview/evidence/search/read/job` 默认返回 JSON；搜索片段只用于定位，读取时按 `next_offset` 分页，并用 `--revision` 核对内容版本。`scan` 保持旧版截止关键词筛选，`scan --all` 保存所有支持的课程资料全文，适合“读取资料”。
+
+可选 MCP 支持，在源码目录安装：
+
+```sh
+python -m pip install ".[mcp]"
+duebridge --project /path/to/study mcp config
+duebridge --project /path/to/study mcp serve
+```
+
+`mcp config` 输出通用 `mcpServers` 配置；用已安装 DueBridge 的 Python 生成，再放进支持本地 stdio MCP 的客户端相应配置处。默认只读缓存，提供来源概览、证据列表、关键词搜索、分页全文和任务状态。加入 `--allow-refresh` 后才暴露后台采集、扫描和结构检查工具。Agent 可直接用 Shell 调 CLI，也可自动发现 MCP 工具；浏览器登录过期仍需人正常登录。完整命令、工具映射和连接方式见 [Agent 接入说明](docs/AGENT_INTERFACE.md)。
+
+项目聚焦浏览器会话、二级列表、折叠内容及可修改的适配器。Canvas 等大平台优先在 Agent 客户端中并列接入现成的读取型 MCP；DueBridge 不提供 Canvas MCP 转发代理。已有项目对比见 [资料读取项目调研](docs/READING_ECOSYSTEM.md)。
 
 ## 浏览器选择
 
@@ -102,7 +130,8 @@ Blackboard 的课程 id 来自打开课程后 URL 中的 `course_id`，例如 `_
 - `webassign`：Cengage 只作为入口，实际作业来自 `assignment_domains` 中的 WebAssign。读取安全的列表二级页，动态列表回退会标明限制。
 - `smartphysics`：读取完整 DOM 的 `.unit-assignment`，包含未展开单元；从入口发现课程。
 - `zjuilearn` / `prairielearn`：逐门课 assessments 列表，保留提示框内的原始计分时间段。
-- `generic`：按配置的 CSS 选择器读取任意名单内页面，供新平台试接入。
+- `generic`：按配置的 CSS 选择器读取名单内页面。
+- `custom`：读取项目 `adapters/` 下的 JavaScript 解析器，供 Agent 修改小众网站逻辑；附离线样例检查。
 
 适配器只适用于它对应的页面结构；仅改变域名无法把任意 LMS 自动变成 Blackboard 或 PrairieLearn。
 
@@ -126,6 +155,8 @@ list_url_pattern = "^https://courses\\.example\\.edu/assignments(?:[/?]|$)"
 
 `selector` 决定保留哪些作业行，包括隐藏元素。`empty_selector` 是页面明确表示空列表的标记；没匹配到作业行且没有空标记时会报错，不认定没有作业。两个 `list_*` 字段都配置才会跟进同站列表链接；默认仅读取当前页面。页面结构不同、内嵌跨域 iframe 或懒加载列表需要专门适配，覆盖范围仍需核对。
 
+复杂页面可使用本地 `customReader`，流程是 `inspect` → 读取清理后的结构快照 → 编辑适配器 → `adapter-check` 离线检查 → 实际 `refresh`。结构快照保留隐藏 DOM，移除表单字段、脚本、iframe、已知凭据属性和 URL 参数；不会更新作业采集时间。未加载的懒加载内容、iframe 或需要交互的菜单仍需适配，工具不会把当前 DOM 当成全部作业。具体开发流程见 [自定义适配器](docs/CUSTOM_ADAPTERS.md)。
+
 ## 本地文件与输出
 
 将 PDF、DOCX、HTML、Markdown、TXT、Notebook 放进配置的 `local.paths`。执行 `duebridge scan` 后，含 due / deadline / 截止等关键词的文件会保存全文，索引链接到全文缓存。支持的读取上限是单文件 20 MB、PDF 150 页。不做 OCR，不读取旧版 Office 文件；扫描失败另列。已有资料可能属于旧学期，也可能使用相对时间。
@@ -138,7 +169,7 @@ duebridge status                      # 检查各来源独立的时间与最近�
 duebridge show --json                 # 给其他助手使用的原始 JSON
 ```
 
-退出码：`0` 成功，`1` 配置或运行错误，`2` 部分来源/本地文件失败，`130` 用户取消。失败时保留已保存数据；最近失败另记，不把源抓取时间更新成尝试时间。来源历史页各有独立时间，新的采集不会自动表示全部课程已覆盖。工具运行一次才采集一次，没有自动后台任务。
+退出码：`0` 成功，`1` 配置或运行错误，`2` 部分来源/本地文件失败，`130` 用户取消。失败时保留已保存数据；最近失败另记，不把源抓取时间更新成尝试时间。来源历史页各有独立时间，新的采集不会自动表示全部课程已覆盖。工具按请求采集；`--background` 可启动本次后台任务，不是定时调度。
 
 ## 数据边界和分享
 
